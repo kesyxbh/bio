@@ -14,18 +14,7 @@ This project performs a gene expression analysis on breast cancer data, focusing
 
 The project is implemented in R and utilizes several Bioconductor and CRAN packages to process and analyze RNA-Seq and clinical data.
 
-## Repository Structure
-```
-.
-├── data/                    # Folder to store input data files
-├── scripts/                 # R scripts for each analysis step
-├── results/                 # Folder for generated results (CSV, plots, etc.)
-├── README.md                # Project description and usage guide
-├── differential_expression_results.csv  # Output from DESeq2 analysis
-├── pathway_enrichment_results.csv       # Pathway enrichment results
-├── lasso_selected_genes.csv             # LASSO-selected genes
-└── analysis_workspace.RData            # Saved R environment
-```
+
 
 ## Requirements
 - R (version >= 4.0.0)
