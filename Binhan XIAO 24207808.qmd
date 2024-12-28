@@ -1,0 +1,171 @@
+---
+title: "Assignment 2 - Gene Expression Analysis and Interpretation"
+author: "Binhan XIAO 24207808"
+format: pdf
+editor: visual
+---
+
+```{r}
+# Load necessary libraries
+library(DESeq2)
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(glmnet)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+# Define file paths
+data_path <- "C:\\Users\\xiao\\OneDrive\\文档"
+rna_seq_file <- file.path(data_path, "data_mrna_seq_v2_rsem.txt")
+patient_data_file <- file.path(data_path, "data_clinical_patient.txt")
+cna_data_file <- file.path(data_path, "data_cna.txt")
+
+# Step 2: Load the required files
+rna_seq_file <- paste(data_path, "data_mrna_seq_v2_rsem.txt", sep="/")
+patient_data_file <- paste(data_path, "data_clinical_patient.txt", sep="/")
+cna_data_file <- paste(data_path, "data_cna.txt", sep="/")
+
+rna_seq <- read.delim(rna_seq_file, header=TRUE, stringsAsFactors=FALSE)
+patient_data <- read.delim(patient_data_file, header=TRUE, stringsAsFactors=FALSE)
+cna_data <- read.delim(cna_data_file, header=TRUE, stringsAsFactors=FALSE)
+
+# Step 3: Match patient IDs across files
+rna_ids <- gsub("\\.", "-", substr(colnames(rna_seq)[-c(1,2)], 1, 12))
+data_cna_ids <- gsub("\\.", "-", substr(colnames(cna_data)[-1], 1, 12))
+data_patient_ids <- gsub("\\.", "-", patient_data$X.Patient.Identifier)
+
+# Remove descriptive rows from patient IDs
+data_patient_ids <- data_patient_ids[!grepl("^#", data_patient_ids)]
+
+# Check ID formats
+print(head(rna_ids))
+print(head(data_cna_ids))
+print(head(data_patient_ids))
+
+# Match IDs
+matched_ids <- intersect(intersect(rna_ids, data_cna_ids), data_patient_ids)
+
+# Check if matched_ids is empty
+if (length(matched_ids) == 0) {
+  stop("No matching patient IDs found between RNA-seq, CNA, and clinical data.")
+} else {
+  print(paste("Matched IDs:", length(matched_ids)))
+}
+# Extract matched RNA-seq data
+sample_indices <- which(rna_ids %in% matched_ids) + 2
+matched_rna_seq <- rna_seq[, c(1, 2, sample_indices)]
+if (ncol(matched_rna_seq) <= 2) {
+  stop("Matched RNA-seq data is empty or has insufficient columns.")
+}
+
+matched_cna_data <- cna_data[, c(1, which(data_cna_ids %in% matched_ids) + 1)]
+matched_patient_data <- patient_data[which(data_patient_ids %in% matched_ids), ]
+
+# Step 4: Create metadata for ERBB2+ amplification
+if ("ERBB2" %in% matched_cna_data$Hugo_Symbol) {
+  erbb2_values <- matched_cna_data[matched_cna_data$Hugo_Symbol == "ERBB2", -1]
+  erbb2_values <- as.numeric(as.character(unlist(erbb2_values)))
+} else {
+  stop("Error: ERBB2 gene not found in matched_cna_data.")
+}
+
+# 创建 metadata
+metadata <- data.frame(
+  ERBB2_Status = ifelse(erbb2_values > 0, "Amplified", "Not_Amplified")
+)
+rownames(metadata) <- matched_ids
+
+# 验证 metadata 是否正确
+if (nrow(metadata) != length(matched_ids)) {
+  stop("Metadata row count does not match matched_ids length. Check matching logic.")
+}
+
+```
+
+```{r}
+
+# Step 5: Normalize RNA-seq data using DESeq2
+library(DESeq2)
+
+count_data <- as.matrix(matched_rna_seq[,-c(1,2)])
+rownames(count_data) <- matched_rna_seq$Hugo_Symbol
+
+# Ensure count_data is numeric
+count_data <- apply(count_data, 2, function(x) floor(as.numeric(as.character(x))))
+if (any(is.na(count_data))) {
+  stop("Error: count_data contains NA values after conversion.")
+}
+
+colnames(count_data) <- matched_ids  # Assign correct column names
+
+metadata$ERBB2_Status <- factor(metadata$ERBB2_Status)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = count_data,
+  colData = metadata,
+  design = ~ ERBB2_Status
+)
+
+# Normalize data
+dds <- DESeq(dds)
+norm_counts <- counts(dds, normalized=TRUE)
+
+# Step 6: Perform Differential Expression Analysis
+res <- results(dds, contrast=c("ERBB2_Status", "Amplified", "Not_Amplified"))
+res <- res[order(res$padj), ]
+write.csv(as.data.frame(res), file="differential_expression_results.csv")
+
+# Step 7: Pathway Enrichment Analysis
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+
+gene_list <- rownames(res)[res$padj < 0.05]
+gene_list <- bitr(gene_list, fromType="SYMBOL", toType="ENTREZID", OrgDb=org.Hs.eg.db)
+
+kegg_res <- enrichKEGG(gene=gene_list$ENTREZID, organism="hsa")
+write.csv(as.data.frame(kegg_res), file="pathway_enrichment_results.csv")
+
+# Step 8: Generate PCA Plot and Heatmap
+vsd <- varianceStabilizingTransformation(dds)
+plotPCA(vsd, intgroup="ERBB2_Status")
+
+library(pheatmap)
+top_genes <- head(order(res$padj), 50)
+top_gene_mat <- assay(vsd)[top_genes, ]
+pheatmap(top_gene_mat, annotation_col=metadata)
+
+# Step 9: Survival Analysis Using glmnet
+library(survival)
+library(glmnet)
+
+surv_data <- matched_patient_data[, c("PATIENT_ID", "OS_MONTHS", "OS_STATUS")]
+surv_data$Event <- ifelse(surv_data$OS_STATUS == "1:DECEASED", 1, 0)
+expression_data <- as.data.frame(t(norm_counts[rownames(res)[1:100], ]))
+surv_fit <- Surv(surv_data$OS_MONTHS, surv_data$Event)
+
+cv_fit <- cv.glmnet(as.matrix(expression_data), surv_fit, family="cox")
+selected_genes <- coef(cv_fit, s=cv_fit$lambda.min)
+write.csv(as.data.frame(selected_genes), file="lasso_selected_genes.csv")
+
+# Save session
+save.image("analysis_workspace.RData")
+
+
+
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+```{}
+```
+
+```{}
+```
+
+```{}
+```
+
+```{}
+```
