@@ -83,8 +83,7 @@ source("scripts/main_analysis.R")
 The following outputs are generated:
 1. **Differential Expression Results**: `differential_expression_results.csv`
 2. **Pathway Enrichment Results**: `pathway_enrichment_results.csv`
-3. **LASSO-Selected Genes**: `lasso_selected_genes.csv`
-4. **PCA Plot and Heatmap**: Saved to the `results/` folder.
+
 
 ## Notes
 - Ensure all file paths are correctly set in the R scripts.
